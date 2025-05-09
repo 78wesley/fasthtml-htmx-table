@@ -48,10 +48,10 @@ class CustomTable:
     def render(self, request: Request):
         params = request.query_params
         q = params.get("q", "").lower()
-        page = int(params.get("page", "1"))
+        skip = int(params.get("skip", "0"))
         top = int(params.get("top", "10"))
-        sortby = params.get("sortby", "id")
-        sorttype = params.get("sorttype", "asc")
+        orderby = params.get("orderby", "id asc").split()
+        field, direction = orderby if len(orderby) == 2 else (orderby[0], "asc")
 
         # Filter and sort data
         data = self.data
@@ -59,42 +59,47 @@ class CustomTable:
             data = [r for r in data if q in r["name"].lower() or q in r["email"].lower()]
 
         # Sort data with natural sorting
-        reverse = sorttype == "desc"
+        reverse = direction == "desc"
         if not data:
             # Return empty list if no data
             pass
-        elif isinstance(data[0][sortby], (int, float)):
-            # Use regular sorting for numbers
-            data = sorted(data, key=lambda x: x[sortby], reverse=reverse)
+        elif isinstance(data[0][field], (int, float)):
+            data = sorted(data, key=lambda x: x[field], reverse=reverse)
         else:
-            # Use natural sorting for strings
-            data = sorted(data, key=lambda x: self.natural_sort_key(x[sortby]), reverse=reverse)
+            data = sorted(data, key=lambda x: self.natural_sort_key(x[field]), reverse=reverse)
 
         total = len(data)
         pages = max((total + top - 1) // top, 1)
-        page = min(max(1, page), pages)
-        start = (page - 1) * top
-        end = start + top
-        current = data[start:end]
+        skip = min(max(0, skip), total - 1) if total > 0 else 0
+        current = data[skip : skip + top]
+        current_page = (skip // top) + 1
 
-        def sort_link(col: str):
-            new_type = "desc" if sortby == col and sorttype == "asc" else "asc"
+        def sort_link(col: str, width: str = ""):
+            new_direction = "desc" if field == col and direction == "asc" else "asc"
+            new_orderby = f"{col} {new_direction}"
             return Th(
-                col.title() + (" ▼" if sortby == col and sorttype == "desc" else " ▲" if sortby == col and sorttype == "asc" else ""),
-                hx_get=f"{self.route_base}/data?q={q}&top={top}&page={page}&sortby={col}&sorttype={new_type}",
+                col.title() + (" ▼" if field == col and direction == "desc" else " ▲" if field == col and direction == "asc" else ""),
+                hx_get=f"{self.route_base}/data?q={q}&top={top}&skip={skip}&orderby={new_orderby}",
                 hx_target=f"#{self.container_id}",
-                hx_push_url=f"{self.route_base}?q={q}&top={top}&page={page}&sortby={col}&sorttype={new_type}",
-                width="10%",
+                hx_push_url=f"{self.route_base}?q={q}&top={top}&skip={skip}&orderby={new_orderby}",
+                width=width,
             )
 
-        header = Thead(Tr(sort_link("id"), sort_link("name"), sort_link("email")))
+        # Add checkbox column to header
+        header = Thead(Tr(Th(Input(type="checkbox", onclick="toggleAll(this)"), width="1%"), sort_link("id"), sort_link("name"), sort_link("email")))
+
         rows = [header]
         if not current:
-            rows.append(Tr(Td("No records found", colspan="3", style="text-align: center")))
+            rows.append(Tr(Td("No records found", colspan="4", style="text-align: center")))
         else:
             for r in current:
-                rows.append(Tr(Td(r["id"]), Td(r["name"]), Td(r["email"])))
+                rows.append(Tr(Td(Input(type="checkbox", value=r["id"], name="selected[]")), Td(r["id"]), Td(r["name"]), Td(r["email"])))
         table = Table(*rows, cls="striped")
+
+        # Add delete button
+        delete_btn = Button(
+            "Delete Selected", type="button", hx_delete=f"{self.route_base}/data", hx_target=f"#{self.container_id}", hx_include="[name='selected[]']", cls="secondary"
+        )
 
         # Search + per-page (live update via HTMX)
         form = Form(
@@ -108,7 +113,7 @@ class CustomTable:
                     hx_target=f"#{self.container_id}",
                     hx_trigger="keyup changed delay:300ms",
                     hx_push_url="false",
-                    hx_include="[name='top'],[name='sortby'],[name='sorttype']",  # Include sort parameters
+                    hx_include="[name='top'],[name='orderby']",
                 ),
                 Select(
                     *[Option(str(x), selected=(x == top)) for x in [10, 20, 50, 100]],
@@ -118,55 +123,71 @@ class CustomTable:
                     hx_target=f"#{self.container_id}",
                     hx_trigger="change",
                     hx_push_url="false",
-                    hx_include="[name='q'],[name='sortby'],[name='sorttype']",  # Include sort parameters
+                    hx_include="[name='q'],[name='orderby']",
                 ),
-                Input(type="hidden", name="sortby", value=sortby),  # Add hidden inputs for sort parameters
-                Input(type="hidden", name="sorttype", value=sorttype),
+                Input(type="hidden", name="orderby", value=f"{field} {direction}"),
             ),
+            delete_btn,
             method="get",
         )
 
-        info = P(f"Showing {start + 1} to {min(end, total)} of {total} records")
+        info = P(f"Showing {skip + 1} to {min(skip + top, total)} of {total} records")
 
         nav = []
 
-        def page_link(p, label=None, cls_extra=""):
-            lbl = label or (Strong(str(p)) if p == page else str(p))
+        def page_link(skip_val, label=None, cls_extra=""):
+            page_num = (skip_val // top) + 1
+            lbl = label or (Strong(str(page_num)) if page_num == current_page else str(page_num))
             return AX(
                 lbl,
-                f"{self.route_base}/data?q={q}&top={top}&page={p}&sortby={sortby}&sorttype={sorttype}",
+                f"{self.route_base}/data?q={q}&top={top}&skip={skip_val}&orderby={field} {direction}",
                 f"{self.container_id}",
-                hx_push_url=f"{self.route_base}?q={q}&top={top}&page={p}&sortby={sortby}&sorttype={sorttype}",
-                cls=("active " if p == page else "") + cls_extra,
+                hx_push_url=f"{self.route_base}?q={q}&top={top}&skip={skip_val}&orderby={field} {direction}",
+                cls=("active " if page_num == current_page else "") + cls_extra,
             )
 
+        # Add JavaScript for toggle all functionality
+        toggle_script = Script(
+            """
+            function toggleAll(source) {
+                var checkboxes = document.getElementsByName('selected[]');
+                for(var i=0; i<checkboxes.length; i++) {
+                    checkboxes[i].checked = source.checked;
+                }
+            }
+        """
+        )
+
         def ellipsis():
-            return A("...", href="", cls="disabled")
+            return A("...", href="")
 
         def should_show(p):
-            return p <= 2 or p > pages - 2 or abs(p - page) <= 1
+            return p <= 2 or p > pages - 2 or abs(p - current_page) <= 1
 
-        if page > 1:
-            nav.append(page_link(page - 1, label="⟨ Prev", cls_extra="prev"))
+        # Previous link
+        if skip >= top:
+            nav.append(page_link(skip - top, label="Previous"))
         else:
-            nav.append(A("⟨ Prev", href="", cls="disabled"))
+            nav.append(A("Previous", href="", cls="disabled"))
 
+        # Page numbers
         last = 0
         for p in range(1, pages + 1):
             if should_show(p):
                 if last and p - last > 1:
                     nav.append(ellipsis())
-                nav.append(page_link(p))
+                nav.append(page_link((p - 1) * top))
                 last = p
 
-        if page < pages:
-            nav.append(page_link(page + 1, label="Next ⟩", cls_extra="next"))
+        # Next link
+        if skip + top < total:
+            nav.append(page_link(skip + top, label="Next"))
         else:
-            nav.append(A("Next ⟩", href="", cls="disabled"))
+            nav.append(A("Next", href="", cls="disabled"))
 
         paginator = Nav(*nav, cls="pagination")
 
-        return Div(form, table, Div(info, paginator, cls="table-footer"))
+        return Div(toggle_script, form, table, Div(info, paginator, cls="table-footer"))
 
 
 RECORDS = [{"id": i, "name": f"User {i}", "email": f"user{i}@example.com"} for i in range(1, 200)]
@@ -177,13 +198,30 @@ ADMIN_RECORDS = [{"id": i, "name": f"Admin {i}", "email": f"admin{i}@example.com
 def index(request: Request):
     return Titled(
         "Record Viewer",
-        A("Admin", href="/admin", type="button"),
-        Div(id="record-container", hx_get="/data?" + request.url.query, hx_trigger="load", hx_target="this"),
+        Group(A("Admin", href="/admin", type="button"), A("Reset data", hx_get="/reset/record-container", type="button", hx_swap="none")),
+        Div(id="record-container", hx_get="/data?" + request.url.query, hx_trigger="load, record-container from:body", hx_target="this"),
     )
 
 
-@rt("/data")
+@rt("/reset/{id}")
+def reset_data(id: str):
+    if id == "record-container":
+        global RECORDS
+        RECORDS = [{"id": i, "name": f"User {i}", "email": f"user{i}@example.com"} for i in range(1, 200)]
+    elif id == "admin-container":
+        global ADMIN_RECORDS
+        ADMIN_RECORDS = [{"id": i, "name": f"Admin {i}", "email": f"admin{i}@example.com"} for i in range(1, 400)]
+
+    return Response(headers={"HX-Trigger": id})
+
+
+@rt("/data", methods=["GET", "DELETE"])
 def data(request: Request):
+    if request.method == "DELETE":
+        selected_ids = [int(id) for id in request.query_params.getlist("selected[]")]
+        global RECORDS
+        RECORDS = [record for record in RECORDS if record["id"] not in selected_ids]
+
     table = CustomTable(RECORDS, route_base="", table_id="record-container")
     return table.render(request)
 
@@ -192,13 +230,17 @@ def data(request: Request):
 def admin(request: Request):
     return Titled(
         "Admin Record Viewer",
-        A("Go Back", href="/", type="button"),
-        Div(id="admin-container", hx_get="/admin/data?" + request.url.query, hx_trigger="load", hx_target="this"),
+        Group(A("Go Back", href="/", type="button"), A("Reset data", hx_get="/reset/admin-container", type="button", hx_swap="none")),
+        Div(id="admin-container", hx_get="/admin/data?" + request.url.query, hx_trigger="load, admin-container from:body", hx_target="this"),
     )
 
 
-@rt("/admin/data")
+@rt("/admin/data", methods=["GET", "DELETE"])
 def admin_data(request: Request):
+    if request.method == "DELETE":
+        selected_ids = [int(id) for id in request.query_params.getlist("selected[]")]
+        global ADMIN_RECORDS
+        ADMIN_RECORDS = [record for record in ADMIN_RECORDS if record["id"] not in selected_ids]
     admin_table = CustomTable(ADMIN_RECORDS, route_base="/admin", table_id="admin-container")
     return admin_table.render(request)
 
