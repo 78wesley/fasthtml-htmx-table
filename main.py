@@ -36,10 +36,10 @@ app, rt = fast_app(
 
 
 class CustomTable:
-    def __init__(self, data: list, route_base: str = "", container_id: str = "record-container"):
+    def __init__(self, data: list, route_base: str = "", table_id: str = "record-container"):
         self.data = data
         self.route_base = route_base
-        self.container_id = container_id
+        self.container_id = table_id
 
     def natural_sort_key(self, s):
         """Natural sort helper function that splits on numbers"""
@@ -177,13 +177,14 @@ ADMIN_RECORDS = [{"id": i, "name": f"Admin {i}", "email": f"admin{i}@example.com
 def index(request: Request):
     return Titled(
         "Record Viewer",
-        Container(A("Admin", href="/admin", type="button"), Div(id="record-container", hx_get="/data?" + request.url.query, hx_trigger="load", hx_target="this")),
+        A("Admin", href="/admin", type="button"),
+        Div(id="record-container", hx_get="/data?" + request.url.query, hx_trigger="load", hx_target="this"),
     )
 
 
 @rt("/data")
 def data(request: Request):
-    table = CustomTable(RECORDS, route_base="", container_id="record-container")
+    table = CustomTable(RECORDS, route_base="", table_id="record-container")
     return table.render(request)
 
 
@@ -191,13 +192,14 @@ def data(request: Request):
 def admin(request: Request):
     return Titled(
         "Admin Record Viewer",
-        Container(A("Go Back", href="/", type="button"), Div(id="admin-container", hx_get="/admin/data?" + request.url.query, hx_trigger="load", hx_target="this")),
+        A("Go Back", href="/", type="button"),
+        Div(id="admin-container", hx_get="/admin/data?" + request.url.query, hx_trigger="load", hx_target="this"),
     )
 
 
 @rt("/admin/data")
 def admin_data(request: Request):
-    admin_table = CustomTable(ADMIN_RECORDS, route_base="/admin", container_id="admin-container")
+    admin_table = CustomTable(ADMIN_RECORDS, route_base="/admin", table_id="admin-container")
     return admin_table.render(request)
 
 
